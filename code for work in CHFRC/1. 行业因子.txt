@@ -1,0 +1,17 @@
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+% 获取股票代码与其行业
+sqlquery1=exec(conn,'select [s_info_windcode] ,SUBSTRING([wind_ind_code],1,6) as [wind_ind_code] from [wind].[dbo].[ASHAREINDUSTRIESCLASS] where [Cur_sign]= ''1'' ORDER BY [S_INFO_WINDCODE]');
+sqlquery1=fetch(sqlquery1);
+close(sqlquery1);
+stock_industry=sqlquery1.data;
+%  获取行业种类
+industry=unique(stock_industry(:,2));
+% 建立行业哑变量矩阵
+dummy=zeros(length(stock_industry),length(industry));
+for i =1:length(industry)
+ key = find (strcmp(stock_industry(:,2),industry(i)));
+ dummy(key,i)=1;
+end
+clear i key 
+% 获得带有股票代码、行业代码与其对应行业哑变量的元胞数组
+stock_industry_dummy=[stock_industry num2cell(dummy)];

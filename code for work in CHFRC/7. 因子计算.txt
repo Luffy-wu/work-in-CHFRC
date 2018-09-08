@@ -1,0 +1,184 @@
+conn1=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+conn2=database('172.16.210.14','jljiang','Cafr2016','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+sqlquery1=exec(conn1,'select [s_info_windcode] ,SUBSTRING([wind_ind_code],1,6) as [wind_ind_code] from [wind].[dbo].[ASHAREINDUSTRIESCLASS] where [Cur_sign]= ''1'' ORDER BY [S_INFO_WINDCODE]');
+sqlquery1=fetch(sqlquery1);
+stock_industry=sqlquery1.data;
+n=length(stock_industry);
+close(sqlquery1);
+for i = 1:n
+ % 查询conn1数据库中以交易日为更新频率的数据
+ tic
+ str1='SELECT [ASHAREEODPRICES].[S_INFO_WINDCODE] ,[ASHAREEODPRICES].[TRADE_DT] ,[ASHAREEODPRICES].[S_DQ_PCTCHANGE] AS STOCK_PCT_CHANGE,[AINDEXEODPRICES].[S_DQ_PCTCHANGE] AS INDEX_PCTCHANGE, [ASHAREEODPRICES].[S_DQ_CLOSE] FROM [wind].[dbo].[ASHAREEODPRICES],[wind].[dbo].[AINDEXEODPRICES] where [ASHAREEODPRICES].[S_INFO_WINDCODE] ='' ';
+ str2=char(stock_industry(i,1));
+ str3=' '' and [AINDEXEODPRICES].[S_INFO_WINDCODE] = ''000300.SH'' and [ASHAREEODPRICES].[TRADE_DT] = [AINDEXEODPRICES].[TRADE_DT] order by [ASHAREEODPRICES].[TRADE_DT]';
+ sqlquery2=exec(conn1,strcat(str1,str2,str3));
+ sqlquery2=fetch(sqlquery2);
+ return_rate=sqlquery2.data; % 序列依次为 股票收益率 指数收益率 股票收盘价
+ toc
+ if length(return_rate) < 520
+  continue;
+ end
+ % 提取收益率序列
+ rate=cell2mat(return_rate(:,3:4)); % 股票收益率 指数收益率
+ % 计算beta因子
+ w1=[252:-1:1]; % 收益率序列长度为252天
+ w1=0.5.^(w1./60); % 半衰期为60天
+ for m=1:length(rate)-251
+  weighted_rate(:,1)=rate(m:m+251,1).*w1';
+  weighted_rate(:,2)=rate(m:m+251,2).*w1';
+  [b,bint,r,rint,stats] = regress(weighted_rate(:,1), [ones(252,1) weighted_rate(:,2)]);
+  result_beta(m+251,:)=b';
+  hsigma(m+251,:)=nanstd(r);
+ end
+ % 计算动量因子
+ w2=[500:-1:1]; % 收益率序列长度为500天
+ w2=0.5.^(w2./120); % 半衰期为120天
+ for m=1:length(rate)-519
+  weighted_rate2=log(rate(m+20:m+519,1)/100+1).*w2';
+  result_momentum(m+519,1)=sum(weighted_rate2);
+ end
+ % 计算波动率因子
+ w3=[252:-1:1]; % 收益率序列长度为252天
+ w3=0.5.^(w3./40); % 半衰期为40天
+ for m=1:length(rate)-251
+  mean_rate=mean(rate(m:m+251,1))/100;
+  dastd(m+251,1)=(sum(w3'.*(rate(m:m+251,1)/100-mean_rate).^2))^0.5;
+ end
+ for m=1:length(rate)-251
+  for mm=1:12
+   z(mm)=sum(log(1+rate(m+(mm-1)*21:m-1+mm*21,1)/100));
+  end
+ cmra(m+251,1)=log(1+max(z))-log(1+min(z));
+ end
+ result_volatility=0.74*dastd+0.16*cmra+0.1*hsigma; % Barra CNE5模型权重
+ % 查询conn2数据库中以交易日为更新频率的数据
+ tic
+ str4='SELECT [ASHAREEODDERIVATIVEINDICATOR].[S_INFO_WINDCODE],[AINDEXEODPRICES].[TRADE_DT],[ASHAREEODDERIVATIVEINDICATOR].[S_VAL_MV],[ASHAREEODDERIVATIVEINDICATOR].[NET_ASSETS_TODAY],[ASHAREEODDERIVATIVEINDICATOR].[S_DQ_FREETURNOVER] ,[ASHAREEODDERIVATIVEINDICATOR].[S_VAL_PE_TTM],[ASHAREEODDERIVATIVEINDICATOR].[S_VAL_PCF_OCFTTM] FROM [windfilesync].[dbo].[ASHAREEODDERIVATIVEINDICATOR],[windfilesync].[dbo].[AINDEXEODPRICES] WHERE [ASHAREEODDERIVATIVEINDICATOR].[S_INFO_WINDCODE]= '' ';
+ str5=char(stock_industry(i,1));
+ str6=' '' AND [AINDEXEODPRICES].[S_INFO_WINDCODE]= ''000300.SH'' AND [ASHAREEODDERIVATIVEINDICATOR].[TRADE_DT] = [AINDEXEODPRICES].[TRADE_DT] ORDER BY [AINDEXEODPRICES].[TRADE_DT] ';
+ sqlquery3=exec(conn2,strcat(str4,str5,str6));
+ sqlquery3=fetch(sqlquery3);
+ toc
+ return_size=sqlquery3.data; % 序列依次为 市值 净资产 换手率 市盈率(TTM) 市现率(经营现金流)
+ if length(return_size) < 520
+  continue;
+ end
+ % 提取市值序列
+ market_size=cell2mat(return_size(:,3:4)); % 市值 净资产
+ market_size(:,1)=market_size(:,1)*10000; % 单位转化为元
+ % 计算规模因子
+ result_size=log(market_size(:,1));
+ % 计算价值因子
+ result_value=market_size(:,2)./market_size(:,1);
+ % 计算流动性因子
+ turnover=cell2mat(return_size(:,5));
+ for j=21:length(turnover)
+  stom(j)=log(nansum(turnover(j-20:j)));
+ end
+ for j=63:length(turnover)
+  stoq(j)=log(1/3*nansum(turnover(j-62:j)));
+ end
+ for j=252:length(turnover)
+  stoa(j)=log(1/12*nansum(turnover(j-251:j)));
+ end
+ result_liqudity=0.35*stom'+0.35*stoq'+0.3*stoa';
+ result_liqudity(1:251,1)=0;
+ result_liqudity(result_liqudity<0)=0;
+ % 部分公司母公司财务报表有缺失，故此处报表类型为子公司报表。部分公司未给出长期负债数据，故此处采用负债总计进行替代。
+ % 由于财务报表公布时期晚于其统计时期，此处使用公布日期作为信息获得时点
+ % 查询conn1数据库中不定期更新的财报数据
+ tic
+ str7='SELECT [ASHAREBALANCESHEET].[S_INFO_WINDCODE],[ASHAREBALANCESHEET].[ANN_DT],[ASHAREBALANCESHEET].[TOT_ASSETS],[ASHAREBALANCESHEET].[TOT_LIAB],[ASHAREBALANCESHEET].[TOT_SHRHLDR_EQY_INCL_MIN_INT] FROM [wind].[dbo].[ASHAREBALANCESHEET] WHERE [ASHAREBALANCESHEET].[S_INFO_WINDCODE]='' ';
+ str8=char(stock_industry(i,1));
+ str9=' '' AND [ASHAREBALANCESHEET].[STATEMENT_TYPE]=''408001000'' ORDER BY [ASHAREBALANCESHEET].[ANN_DT]';
+ sqlquery4=exec(conn1,strcat(str7,str8,str9));
+ sqlquery4=fetch(sqlquery4);
+ return_balance=sqlquery4.data; % 序列依次为 总资产 总负债 所有者权益
+ toc
+ trade_day=str2num(cell2mat(return_rate(:,2)));
+ announcement_day=str2num(cell2mat(return_balance(:,2)));
+ key=zeros(length(trade_day),1);
+ for k=1:length(announcement_day)
+  key(find(trade_day>announcement_day(k)))=key(find(trade_day>announcement_day(k)))+1;
+ end
+ % 提取资产负债序列
+ balance=[cell2mat(return_balance(key,3:5)) market_size(:,1)]; % 总资产 总负债 权益 市值
+ % 计算杠杆因子
+ mlev=(balance(:,4)+balance(:,2))./balance(:,4);
+ dtoa=balance(:,1)./balance(:,2);
+ blev=(balance(:,3)+balance(:,2))./balance(:,3);
+ result_leverage=0.38*mlev+0.35*dtoa+0.27*blev; % Barra CNE5模型权重
+ % 查询conn2数据库中不定期更新的预测数据
+ tic
+ str10='SELECT [ASHARECONSENSUSROLLINGDATA].[S_INFO_WINDCODE],[ASHARECONSENSUSROLLINGDATA].[EST_DT],SUBSTRING([ASHARECONSENSUSROLLINGDATA].[ROLLING_TYPE],3,1) AS [ROLLING_TYPE],[ASHARECONSENSUSROLLINGDATA].[EST_EPS],[ASHARECONSENSUSROLLINGDATA].[NET_PROFIT],[ASHARECONSENSUSROLLINGDATA].[EST_TOTAL_PROFIT] FROM [windfilesync].[dbo].[ASHARECONSENSUSROLLINGDATA],[windfilesync].[dbo].[AINDEXEODPRICES] WHERE [ASHARECONSENSUSROLLINGDATA].[S_INFO_WINDCODE]='' ';
+ str11=char(stock_industry(i,1));
+ str12=' '' AND [ASHARECONSENSUSROLLINGDATA].[ROLLING_TYPE] LIKE ''FY%'' AND [ASHARECONSENSUSROLLINGDATA].[EST_DT]=[AINDEXEODPRICES].[TRADE_DT] AND [AINDEXEODPRICES].[S_INFO_WINDCODE] = ''000300.SH'' ORDER BY [ASHARECONSENSUSROLLINGDATA].[EST_DT]';
+ sqlquery5=exec(conn2,strcat(str10,str11,str12));
+ sqlquery5=fetch(sqlquery5);
+ return_predict=sqlquery5.data; % 序列依次为 预测类型 个股一致预测基本每股收益 基年净利润 预测净利润
+ toc
+ fy0=return_predict(find(str2num(cell2mat(return_predict(:,3)))==0),:);
+ fy1=return_predict(find(str2num(cell2mat(return_predict(:,3)))==1),:);
+ fy3=return_predict(find(str2num(cell2mat(return_predict(:,3)))==3),:);
+ key_fy0=find(trade_day==str2num(cell2mat(fy0(1,2))));
+ key_fy1=find(trade_day==str2num(cell2mat(fy1(1,2))));
+ key_fy3=find(trade_day==str2num(cell2mat(fy3(1,2))));
+ % 匹配市盈率序列与预测序列
+ earning=[NaN(1,key_fy0-1) cell2mat(fy0(:,4))']';
+ earning(:,2:3)=1./cell2mat(return_size(:,6:7));
+ % 计算收益率因子
+ result_earning=0.68*earning(:,1)./cell2mat(return_rate(:,5))+0.11*earning(:,2)+0.21*earning(:,3); % Barra CNE5模型权重
+ % 查询conn1数据库中不定期更新的财务指标
+ tic
+ str13='SELECT [ASHAREFINANCIALINDICATOR].[S_INFO_WINDCODE] ,[ASHAREFINANCIALINDICATOR].[ANN_DT] ,[ASHAREFINANCIALINDICATOR].[S_FA_YOY_TR] ,[ASHAREFINANCIALINDICATOR].[S_FA_YOYNETPROFIT_DEDUCTED] FROM [wind].[dbo].[ASHAREFINANCIALINDICATOR] WHERE [ASHAREFINANCIALINDICATOR].[S_INFO_WINDCODE]='' ';
+ str14=char(stock_industry(i,1));
+ str15=' '' ORDER BY [ASHAREFINANCIALINDICATOR].[ANN_DT]';
+ sqlquery6=exec(conn1,strcat(str13,str14,str15));
+ sqlquery6=fetch(sqlquery6);
+ return_growth=sqlquery6.data; % 序列依次为 企业营业总收入同比增长率 企业归属母公司净利润同比增长率
+ toc
+ compunded_growth=[str2num(cell2mat(return_growth(:,2)))/10000 cell2mat(return_growth(:,3:4))/100];
+ year_growth=[floor(min(compunded_growth(:,1))): floor(max(compunded_growth(:,1)))]';
+ % 计算每年以及过去五年平均的企业营业总收入同比增长率 企业归属母公司净利润同比增长率
+ for k=1:length(year_growth)-1
+  if length(max(find(year_growth(k)<compunded_growth(:,1) & compunded_growth(:,1)<year_growth(k+1))))==0
+   year_growth(k,2:3)=NaN;
+  else
+   year_growth(k,2:3)=compunded_growth(max(find(year_growth(k)<compunded_growth(:,1) & compunded_growth(:,1)<year_growth(k+1))),2:3);
+  end
+ end
+ for k=1:length(compunded_growth)
+  if compunded_growth(k,1)-4< floor(min(compunded_growth(:,1))) ;
+   compunded_growth(k,4:5)=NaN;
+  else
+   kk=max(find(year_growth(:,1)<compunded_growth(k,1)));
+   compunded_growth(k,4)=((1+compunded_growth(k,2))*prod(year_growth(kk-4:kk,2)+1))^0.2-1;
+   compunded_growth(k,5)=((1+compunded_growth(k,3))*prod(year_growth(kk-4:kk,3)+1))^0.2-1;
+  end
+ end
+ growth=compunded_growth(key,4:5); 
+ % 计算增长率因子
+ egib_s=[NaN(1,key_fy1-1) (cell2mat(fy1(:,6))./cell2mat(fy1(:,5)))']'-1;
+ egib=[NaN(1,key_fy3-1) (cell2mat(fy3(:,6))./cell2mat(fy3(:,5)))']'.^(1/3)-1;
+ result_growth=0.47*growth(:,1)+0.24*growth(:,2)+0.18*egib+0.11*egib_s;
+ % 整合计算结果
+ result=[return_rate(:,1:2),num2cell([result_beta(:,2),result_momentum,result_volatility,result_size,result_value,result_liqudity,result_leverage,result_earning,result_growth])];
+ % 关闭游标
+ close(sqlquery2);
+ close(sqlquery3);
+ close(sqlquery4);
+ close(sqlquery5);
+ close(sqlquery6);
+ tic
+ % 写入数据库
+ fastinsert(conn1, 'WYP.dbo.yinzi_test',  {'code','trade_dt','beta','momentum','volatility','size','value','liqudity','leverage','earning','growth'},result);
+ toc
+ disp(i)
+ clear return_rate result_beta result_momentum
+ clear return_size market_size  result_size result_value stoa stoq stom result_liqudity 
+ clear dastd cmra hsigma result_volatility
+ clear trade_day announcement_day key mlev dtoa blev result_leverage
+ clear return_predict fy0 fy1 fy3 key_fy0 key_fy1 key_fy2 earning result_earning
+ clear return_growth compunded_growth year_growth growth result_growth
+ clear result
+end

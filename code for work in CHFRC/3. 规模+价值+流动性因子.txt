@@ -1,0 +1,42 @@
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+sqlquery1=exec(conn,'select [s_info_windcode] ,SUBSTRING([wind_ind_code],1,6) as [wind_ind_code] from [wind].[dbo].[ASHAREINDUSTRIESCLASS] where [Cur_sign]= ''1'' ORDER BY [S_INFO_WINDCODE]');
+sqlquery1=fetch(sqlquery1);
+stock_industry=sqlquery1.data;
+n=length(stock_industry);
+close(sqlquery1);
+close(conn)
+conn=database('172.16.210.14','jljiang','Cafr2016','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+for i = 1:n
+ str1='SELECT [ASHAREEODDERIVATIVEINDICATOR].[S_INFO_WINDCODE],[AINDEXEODPRICES].[TRADE_DT],[ASHAREEODDERIVATIVEINDICATOR].[S_VAL_MV],[ASHAREEODDERIVATIVEINDICATOR].[NET_ASSETS_TODAY],[ASHAREEODDERIVATIVEINDICATOR].[S_DQ_FREETURNOVER] FROM [windfilesync].[dbo].[ASHAREEODDERIVATIVEINDICATOR],[windfilesync].[dbo].[AINDEXEODPRICES] WHERE [ASHAREEODDERIVATIVEINDICATOR].[S_INFO_WINDCODE]= '' ';
+ str2=char(stock_industry(i,1));
+ str3=' '' AND [AINDEXEODPRICES].[S_INFO_WINDCODE]= ''000300.SH'' AND [ASHAREEODDERIVATIVEINDICATOR].[TRADE_DT] = [AINDEXEODPRICES].[TRADE_DT] ORDER BY [AINDEXEODPRICES].[TRADE_DT] ';
+ sqlquery2=exec(conn,strcat(str1,str2,str3));
+ sqlquery2=fetch(sqlquery2);
+ return_size=sqlquery2.data;
+ if length(return_size) < 520
+  continue;
+ end
+ market_size=cell2mat(return_size(:,3:4));
+ market_size(:,1)=market_size(:,1)*10000; % 单位转化为元
+ % 计算规模因子
+ result_size=log(market_size(:,1));
+ % 计算价值因子
+ result_value=market_size(:,2)./market_size(:,1);
+ result=[return_size(:,1:2) num2cell(result_size) num2cell(result_value)];
+ % 计算流动性因子
+ turnover=cell2mat(return_size(:,5));
+ for j=21:length(turnover)
+  stom(j)=log(nansum(turnover(j-20:j)));
+ end
+ for j=63:length(turnover)
+  stoq(j)=log(1/3*nansum(turnover(j-62:j)));
+ end
+ for j=252:length(turnover)
+  stoa(j)=log(1/12*nansum(turnover(j-251:j)));
+ end
+ result_liqudity=0.35*stom'+0.35*stoq'+0.3*stoa';
+ result_liqudity(1:251,1)=0;
+ disp(i)
+ % 未写导入语句
+ clear result return_size market_size  result_size result_value stoa stoq stom result_liqudity
+end

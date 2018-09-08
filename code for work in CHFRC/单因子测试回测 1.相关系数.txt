@@ -1,0 +1,38 @@
+% 各动量因子间相关系数计算
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+sqlquery1=exec(conn,'SELECT DISTINCT [code] FROM [wwb].[dbo].[Ashare_SZ_momentum_factor_group] ORDER BY [code]');
+sqlquery1=fetch(sqlquery1);
+stock_code=sqlquery1.data;
+close(sqlquery1);
+n=length(stock_code);
+blank=[];
+for i = 1:n
+ tic
+ % 提取序列依次为 [code]证券代码 [trade_month]交易年月 动量因子组合13列
+ str1='SELECT [code],[trade_month],[HAlpha],[return_1m],[return_3m],[return_6m],[return_12m],[wgt_return_1m],[wgt_return_3m],[wgt_return_6m],[wgt_return_12m],[exp_wgt_return_1m],[exp_wgt_return_3m],[exp_wgt_return_6m],[exp_wgt_return_12m] FROM [wwb].[dbo].[Ashare_SZ_momentum_factor_group] WHERE [code]='' ';
+ str2=char(stock_code(i,1));
+ str3=' ''ORDER BY [trade_month]';
+ sqlquery2=exec(conn,strcat(str1,str2,str3));
+ sqlquery2=fetch(sqlquery2);
+ return_factor=sqlquery2.data;
+ toc
+ if size(return_factor,1)<36
+  monthly_coef{i,1}=0;
+  blank=[blank;i];
+ else
+  monthly_coef{i,1}=corrcoef(cell2mat(return_factor(end-31:end,3:15)));
+ end
+end
+monthly_coef(blank)=[];
+for j=1:13
+ for k=1:13
+  monthly_coef_temp=[];
+  for i=1:length(monthly_coef)
+   monthly_coef_temp=[monthly_coef_temp;monthly_coef{i,1}(j,k)];
+  end
+  monthly_coef_avg(j,k)=nanmean(monthly_coef_temp);
+  monthly_coef_std(j,k)=nanstd(monthly_coef_temp);
+  clear monthly_coef_temp
+ end
+end
+monthly_coef_strength=monthly_coef_avg./monthly_coef_std;

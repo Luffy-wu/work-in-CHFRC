@@ -1,0 +1,140 @@
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+% 提取所有A股代码（不包含曾遭ST PT处理的股票）
+sqlquery1=exec(conn,'SELECT DISTINCT [ASHAREDESCRIPTION].[S_INFO_WINDCODE] FROM [wind].[dbo].[ASHAREDESCRIPTION],[wind].[dbo].[ASHAREST] WHERE LEFT([ASHAREDESCRIPTION].[S_INFO_WINDCODE],1)<>''A'' AND [ASHAREDESCRIPTION].[S_INFO_WINDCODE]<>[ASHAREST].[S_INFO_WINDCODE] ORDER BY [ASHAREDESCRIPTION].[S_INFO_WINDCODE]');
+sqlquery1=fetch(sqlquery1);
+stock_code=sqlquery1.data;
+% 提取股票行业及其变更记录
+sqlquery2=exec(conn,'SELECT [S_INFO_WINDCODE],SUBSTRING([ASHAREINDUSTRIESCLASS].[WIND_IND_CODE],1,6) AS [WIND_IND_CODE] ,LEFT([ENTRY_DT],6) AS [[ENTRY_DT] ,LEFT(ISNULL([REMOVE_DT],''99999999'') ,6) AS [REMOVE_DT] FROM [wind].[dbo].[ASHAREINDUSTRIESCLASS] ORDER BY [S_INFO_WINDCODE]');
+sqlquery2=fetch(sqlquery2);
+industry_code=sqlquery2.data;
+close(sqlquery1);
+close(sqlquery2);
+n=length(stock_code);
+for i = 1:n
+ % 查询数据库中交易日收益率相关数据
+ tic
+ str1='SELECT [S_INFO_WINDCODE],[TRADE_DT],LEFT([TRADE_DT],6) AS [TRADE_YM],[STOCK_PCTCHANGE],[INDEX_PCTCHANGE],ISNULL([S_DQ_FREETURNOVER],''0'') AS [FREETURNOVER],[S_DQ_MV] FROM [wwb].[dbo].[Ashare_SZ_momentum_data] WHERE [S_INFO_WINDCODE] ='' ';
+ str2=char(stock_code(i,1));
+ str3=' ''ORDER BY [TRADE_DT]';
+ sqlquery3=exec(conn,strcat(str1,str2,str3));
+ sqlquery3=fetch(sqlquery3);
+ % 提取序列依次为 [S_INFO_WINDCODE]证券代码 [TRADE_DT]交易日[TRADE_YM]交易年月 [STOCK_PCTCHANGE]股票收益率 [INDEX_PCTCHANGE]指数收益率 [S_DQ_FREETURNOVER]流通股换手率 [S_DQ_MV]流通股市值
+ return_rate=sqlquery3.data;
+ toc
+ % 剔除2000年前退市的股票（return_rate='No Data'）
+ if length(return_rate)<=1
+  continue
+ end
+ % 提取年月编号
+ month_code=unique(return_rate(:,3));
+ % 剔除总上市时间不超过6年的股票
+ if length(month_code)<=72
+  continue
+ end
+ % 剔除暂停上市超过1年的股票（针对交易日无收益率记录情况）
+ start_month_number=floor((str2num(cell2mat(month_code(1,1)))-200000)/100)*12+mod(str2num(cell2mat(month_code(1,1))),100);
+ end_month_number=floor((str2num(cell2mat(month_code(end,1)))-200000)/100)*12+mod(str2num(cell2mat(month_code(end,1))),100);
+ if end_month_number-start_month_number-length(month_code)+1>12
+  continue
+ end
+ % 确定行业分类
+ industry_temp=industry_code(strcmp(industry_code(:,1),return_rate(1,1)),:);
+ for j=1:size(industry_temp,1)
+  start_month_code=find(str2num(cell2mat(month_code))<=str2num(cell2mat(industry_temp(j,3))), 1, 'last' );
+  end_month_code=find(str2num(cell2mat(month_code))<=str2num(cell2mat(industry_temp(j,4))), 1, 'last' );
+  if isempty(start_month_code) 
+   start_month_code=1;
+  end
+  industry(start_month_code:end_month_code,1)=industry_temp(j,2);
+  clear start_month_code end_month_code
+ end
+ clear industry_temp
+ % 计算当月月收益率和月平均市值
+ for j=1:length(month_code)
+  daily_stock_return_temp=cell2mat(return_rate(strcmp(return_rate(:,3),month_code(j)),4));
+  daily_index_return_temp=cell2mat(return_rate(strcmp(return_rate(:,3),month_code(j)),5));
+  stock_return_m(j,1)=prod(daily_stock_return_temp/100+1)-1;
+  index_return_m(j,1)=prod(daily_index_return_temp/100+1)-1;
+  market_value_temp=cell2mat(return_rate(strcmp(return_rate(:,3),month_code(j)),7));
+  market_value(j,1)=sum(market_value_temp)/length(market_value_temp);
+ end
+ clear daily_index_return_temp market_value_temp
+ % 计算个股60个月收益率与上证300指数线性回归的截距项
+ for j=61:length(month_code)
+  beta=regress(stock_return_m(j-60:j-1,1),[ones(60,1) index_return_m(j-60:j-1,1)]);
+  HAlpha(j,1)=beta(1);
+ end
+ % 计算前1个月月收益率
+ for j=2:length(month_code)
+  daily_stock_return_temp=cell2mat(return_rate(strcmp(return_rate(:,3),month_code(j-1)),4));
+  return_1m(j,1)=prod(daily_stock_return_temp/100+1)-1;
+  free_turnover_temp=cell2mat(return_rate(strcmp(return_rate(:,3),month_code(j-1)),6));
+  wgt=free_turnover_temp/sum(free_turnover_temp);
+  wgt_return_1m(j,1)=sum(wgt.*daily_stock_return_temp);
+  exp_wgt=exp([-length(daily_stock_return_temp):1:-1]'/1/4).*free_turnover_temp;
+  exp_wgt=exp_wgt/sum(exp_wgt);
+  exp_wgt_return_1m(j,1)=sum(exp_wgt.*daily_stock_return_temp);
+ end
+ % 计算前3个月月收益率
+ for j=4:length(month_code)
+  start_trade_day=strcmp(return_rate(:,3),month_code(j-3));
+  end_trade_day=strcmp(return_rate(:,3),month_code(j-1));
+  daily_stock_return_temp=cell2mat(return_rate(find(start_trade_day==1,1,'first'):find(end_trade_day==1,1,'last'),4));
+  return_3m(j,1)=prod(daily_stock_return_temp/100+1)-1;
+  free_turnover_temp=cell2mat(return_rate(find(start_trade_day==1,1,'first'):find(end_trade_day==1,1,'last'),6));
+  wgt=free_turnover_temp/sum(free_turnover_temp);
+  wgt_return_3m(j,1)=sum(wgt.*daily_stock_return_temp);
+  exp_wgt=exp([-length(daily_stock_return_temp):1:-1]'/3/4).*free_turnover_temp;
+  exp_wgt=exp_wgt/sum(exp_wgt);
+  exp_wgt_return_3m(j,1)=sum(exp_wgt.*daily_stock_return_temp);
+ end
+ % 计算前6个月月收益率
+ for j=7:length(month_code)
+  start_trade_day=strcmp(return_rate(:,3),month_code(j-6));
+  end_trade_day=strcmp(return_rate(:,3),month_code(j-1));
+  daily_stock_return_temp=cell2mat(return_rate(find(start_trade_day==1,1,'first'):find(end_trade_day==1,1,'last'),4));
+  return_6m(j,1)=prod(daily_stock_return_temp/100+1)-1;
+  free_turnover_temp=cell2mat(return_rate(find(start_trade_day==1,1,'first'):find(end_trade_day==1,1,'last'),6));
+  wgt=free_turnover_temp/sum(free_turnover_temp);
+  wgt_return_6m(j,1)=sum(wgt.*daily_stock_return_temp);
+  exp_wgt=exp([-length(daily_stock_return_temp):1:-1]'/6/4).*free_turnover_temp;
+  exp_wgt=exp_wgt/sum(exp_wgt);
+  exp_wgt_return_6m(j,1)=sum(exp_wgt.*daily_stock_return_temp);
+ end
+ % 计算前12个月月收益率
+ for j=13:length(month_code)
+  start_trade_day=strcmp(return_rate(:,3),month_code(j-12));
+  end_trade_day=strcmp(return_rate(:,3),month_code(j-1));
+  daily_stock_return_temp=cell2mat(return_rate(find(start_trade_day==1,1,'first'):find(end_trade_day==1,1,'last'),4));
+  return_12m(j,1)=prod(daily_stock_return_temp/100+1)-1;
+  free_turnover_temp=cell2mat(return_rate(find(start_trade_day==1,1,'first'):find(end_trade_day==1,1,'last'),6));
+  wgt=free_turnover_temp/sum(free_turnover_temp);
+  wgt_return_12m(j,1)=sum(wgt.*daily_stock_return_temp);
+  exp_wgt=exp([-length(daily_stock_return_temp):1:-1]'/12/4).*free_turnover_temp;
+  exp_wgt=exp_wgt/sum(exp_wgt);
+  exp_wgt_return_12m(j,1)=sum(exp_wgt.*daily_stock_return_temp);
+ end
+ % 保存格式为 股票代码 交易年月 行业分类 月平均市值 当月收益率 动量因子组合13列
+ result=[return_rate(1:length(month_code),1),month_code,industry,num2cell([market_value,stock_return_m,HAlpha,return_1m,return_3m,return_6m,return_12m,wgt_return_1m,wgt_return_3m,wgt_return_6m,wgt_return_12m,exp_wgt_return_1m,exp_wgt_return_3m,exp_wgt_return_6m,exp_wgt_return_12m])];
+ % 剔除前60个月数据
+ result(1:60,:)=[];
+ % 剔除当月停牌的股票（针对交易日收益率记录为零情况）
+ % 同时针对停牌期间换手率为0的情况对NaN进行处理
+ suspension_month=find(cell2mat(result(:,5))==0);
+ nan_month=isnan(cell2mat(result(:,5:end)));
+ if ~isempty(suspension_month)
+   result(suspension_month,:)=[];
+   result(sum(nan_month,2)~=0,:)=[];
+ end
+ % 写入数据库 字段名称与含义如下 [code]证券代码 [trade_month]交易年月 [industry]行业分类 [market_value]月平均市值 [monthly_return]当月收益率
+ % [HAlpha] 个股60个月收益率与上证综指线性回归的截距项
+ % [return_'N'm] 个股最近N个月收益率
+ % [wgt_return_'N'm] 个股最近N个月内以每月换手率作为权重对每日收益率求算术平均值
+ % [exp_wgt_return_'N'm] 个股最近N个月内以每月换手率乘以函数exp(-x_i/N/4)作为权重对每日收益率求算术平均值（x_i为该日距离截面日的天数）
+ fastinsert(conn, 'wwb.dbo.Ashare_SZ_momentum_factor_group',  {'code','trade_month','industry','market_value','monthly_return','HAlpha','return_1m','return_3m','return_6m','return_12m','wgt_return_1m','wgt_return_3m','wgt_return_6m','wgt_return_12m','exp_wgt_return_1m','exp_wgt_return_3m','exp_wgt_return_6m','exp_wgt_return_12m'},result);
+ i
+ clear industry market_value stock_return_m index_return_m 
+ clear HAlpha return_1m return_3m return_6m return_12m 
+ clear wgt_return_1m wgt_return_3m wgt_return_6m wgt_return_12m 
+ clear exp_wgt_return_1m exp_wgt_return_3m exp_wgt_return_6m exp_wgt_return_12m
+end

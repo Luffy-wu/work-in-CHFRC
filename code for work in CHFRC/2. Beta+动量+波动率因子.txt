@@ -1,0 +1,57 @@
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+sqlquery1=exec(conn,'select [s_info_windcode] ,SUBSTRING([wind_ind_code],1,6) as [wind_ind_code] from [wind].[dbo].[ASHAREINDUSTRIESCLASS] where [Cur_sign]= ''1'' ORDER BY [S_INFO_WINDCODE]');
+sqlquery1=fetch(sqlquery1);
+stock_industry=sqlquery1.data;
+n=length(stock_industry);
+close(sqlquery1);
+for i = 1:n
+ str1='SELECT [ASHAREEODPRICES].[S_INFO_WINDCODE] ,[ASHAREEODPRICES].[TRADE_DT] ,[ASHAREEODPRICES].[S_DQ_PCTCHANGE] AS STOCK_PCT_CHANGE,[AINDEXEODPRICES].[S_DQ_PCTCHANGE] AS INDEX_PCTCHANGE FROM [wind].[dbo].[ASHAREEODPRICES],[wind].[dbo].[AINDEXEODPRICES] where [ASHAREEODPRICES].[S_INFO_WINDCODE] ='' ';
+ str2=char(stock_industry(i,1));
+ str3=' '' and [AINDEXEODPRICES].[S_INFO_WINDCODE] = ''000300.SH'' and [ASHAREEODPRICES].[TRADE_DT] = [AINDEXEODPRICES].[TRADE_DT] order by [ASHAREEODPRICES].[TRADE_DT]';
+ sqlquery2=exec(conn,strcat(str1,str2,str3));
+ sqlquery2=fetch(sqlquery2);
+ return_rate=sqlquery2.data;
+ if length(return_rate) < 520
+  continue;
+ end
+ % 提取收益率序列
+ rate=cell2mat(return_rate(:,3:4));
+ % 计算beta因子
+ w=[252:-1:1]; % 收益率序列长度为252天
+ w=0.5.^(w./60); % 半衰期为60天
+ for m=1:length(rate)-251
+  weighted_rate(:,1)=rate(m:m+251,1).*w';
+  weighted_rate(:,2)=rate(m:m+251,2).*w';
+  [b,bint,r,rint,stats] = regress(weighted_rate(:,1), [ones(252,1) weighted_rate(:,2)]);
+  result_beta(m+251,:)=b';
+  hsigma(m+251,:)=nanstd(r);
+ end
+ % 计算动量因子
+ w2=[500:-1:1]; % 收益率序列长度为500天
+ w2=0.5.^(w2./120); % 半衰期为120天
+ for m=1:length(rate)-519
+  weighted_rate2=log(rate(m+20:m+519,1)/100+1).*w2';
+  result_momentum(m+519,1)=sum(weighted_rate2);
+ end
+ % 计算波动率因子
+ w3=[252:-1:1]; % 收益率序列长度为252天
+ w3=0.5.^(w./40); % 半衰期为40天
+ for m=1:length(rate)-251
+  mean_rate=mean(rate(m:m+251,1))/100;
+  dastd(m+251,1)=(sum(w3'.*(rate(m:m+251,1)/100-mean_rate).^2))^0.5;
+ end
+ for m=1:length(rate)-251
+  for mm=1:12
+   z(mm)=sum(log(1+rate(m+(mm-1)*21:m-1+mm*21,1)/100));
+  end
+ cmra(m+251,1)=log(1+max(z))-log(1+min(z));
+ end
+ result_volatility=0.74*dastd+0.16*cmra+0.1*hsigma; % Barra 五因子模型权重
+ result=[return_rate(:,1:2) num2cell(result_beta(:,2)) num2cell(result_momentum) num2cell(result_volatility)];
+ disp(i)
+ close(sqlquery2);
+ tic
+ fastinsert(conn, 'WYP.dbo.yinzi_test',  {'code','trade_dt','beta','momentum'},result); % 写入数据库
+ toc
+ clear return_rate result_beta result_momentum result
+end

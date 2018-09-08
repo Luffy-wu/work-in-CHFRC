@@ -1,0 +1,51 @@
+select [s_info_windcode]
+      ,(case SUBSTRING([wind_ind_code],1,6) /*Wind行业分类代码与行业指数代码匹配*/
+	   when 621010 then '882100'  /*能源Ⅱ*/
+	   when 621510 then '882101'  /*材料Ⅱ*/
+	   when 622010 then '882102'  /*资本货物*/
+	   when 622020 then '882103'  /*商业和专业服务*/
+	   when 622030 then '882104'  /*运输*/
+	   when 622510 then '882105'  /*汽车与汽车零部件*/
+	   when 622520 then '882106'  /*耐用消费品与服装*/
+	   when 622530 then '882107'  /*消费者服务Ⅱ*/
+	   when 622540 then '882108'  /*媒体Ⅱ*/
+	   when 622550 then '882109'  /*零售业*/
+	   when 623010 then '882110'  /*食品与主要用品零售Ⅱ*/
+	   when 623020 then '882111'  /*食品、饮料与烟草*/
+	   when 623030 then '882112'  /*家庭与个人用品*/
+	   when 623510 then '882113'  /*医疗保健设备与服务*/
+	   when 623520 then '882114'  /*制药、生物科技与生命科学*/
+	   when 624010 then '882115'  /*银行*/
+	   when 624020 then '882116'  /*多元金融*/
+	   when 624030 then '882117'  /*保险Ⅱ*/
+	   when 624040 then '882118'  /*房地产*/
+	   when 624510 then '882119'  /*软件与服务*/
+	   when 624520 then '882120'  /*技术硬件与设备*/
+	   when 624530 then '882121'  /*半导体与半导体生产设备*/
+	   when 625010 then '882122'  /*电信服务Ⅱ*/
+	   when 625510 then '882123'  /*公用事业Ⅱ*/
+	   end) as [wind_ind_code]
+from [wind].[dbo].[ASHAREINDUSTRIESCLASS]
+where [Cur_sign]= '1'
+ORDER BY [S_INFO_WINDCODE]
+--查询所有股票及其行业代码
+
+SELECT [ASHAREEODPRICES].[S_INFO_WINDCODE]
+      ,[ASHAREEODPRICES].[TRADE_DT]
+      ,[ASHAREEODPRICES].[S_DQ_PCTCHANGE] AS STOCK_PCT_CHANGE /*查询股票日收益率*/
+      ,[AINDEXWINDINDUSTRIESEOD].[S_DQ_PCTCHANGE] AS INDUSTRY_PCTCHANGE /*查询行业日收益率*/
+      ,[AINDEXEODPRICES].[S_DQ_PCTCHANGE] AS INDEX_PCTCHANGE /*查询指数日收益率*/
+  FROM [wind].[dbo].[ASHAREEODPRICES],[wind].[dbo].[AINDEXWINDINDUSTRIESEOD],[wind].[dbo].[AINDEXEODPRICES]
+  where [ASHAREEODPRICES].S_INFO_WINDCODE = '000001.SZ' /*匹配股票*/
+  and [AINDEXWINDINDUSTRIESEOD].[S_INFO_WINDCODE] like '882115%' /*匹配行业*/
+  and [AINDEXEODPRICES].[S_INFO_WINDCODE] = '000300.SH' /*匹配指数*/
+  and [ASHAREEODPRICES].[TRADE_DT] = [AINDEXWINDINDUSTRIESEOD].[TRADE_DT] /*对齐时间*/
+  and [ASHAREEODPRICES].[TRADE_DT] = [AINDEXEODPRICES].[TRADE_DT]
+  order by [ASHAREEODPRICES].[TRADE_DT]
+
+[wind].[dbo].[ASHAREEODDERIVATIVEINDICATOR] 衍生指标 市值、PE
+
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+curs1=exec(conn,'select [s_info_windcode],[wind_ind_code]from [wind].dbo.ASHAREINDUSTRIESCLASS')
+codelist=curs1.data;
+curs1=fetch(curs1);

@@ -1,0 +1,23 @@
+
+% 部分公司母公司财务报表有缺失，故此处报表类型为子公司报表。部分公司未给出长期负债数据，故此处采用负债总计进行替代。
+% 由于财务报表公布时期晚于其统计时期，此处使用公布日期作为信息获得时点
+% 
+ str7='SELECT TOP 1000 [ASHAREBALANCESHEET].[S_INFO_WINDCODE],[ASHAREBALANCESHEET].[ANN_DT],[ASHAREBALANCESHEET].[TOT_ASSETS],[ASHAREBALANCESHEET].[TOT_LIAB],[ASHAREBALANCESHEET].[TOT_SHRHLDR_EQY_INCL_MIN_INT] FROM [wind].[dbo].[ASHAREBALANCESHEET] WHERE [ASHAREBALANCESHEET].[S_INFO_WINDCODE]='' ';
+ str8=char(stock_industry(i,1));
+ str9=' '' AND [ASHAREBALANCESHEET].[STATEMENT_TYPE]=''408001000'' ORDER BY [ASHAREBALANCESHEET].[ANN_DT]';
+ sqlquery4=exec(conn1,strcat(str7,str8,str9));
+ sqlquery4=fetch(sqlquery4);
+ return_balance=sqlquery4.data;
+ trade_day=str2num(cell2mat(return_rate(:,2)));
+ announcement_day=str2num(cell2mat(return_balance(:,2)));
+ key=zeros(length(trade_day),1);
+ for k=1:length(announcement_day)
+  key(find(trade_day>announcement_day(k)))=key(find(trade_day>announcement_day(k)))+1;
+ end
+ % 提取资产负债序列
+ balance=[cell2mat(return_balance(key,3:5)) market_size(:,1)]; % 总资产 总负债 权益 市值
+ % 计算杠杆因子
+ mlev=(balance(:,4)+balance(:,2))./balance(:,4);
+ dtoa=balance(:,1)./balance(:,2);
+ blev=(balance(:,3)+balance(:,2))./balance(:,3);
+ result_leverage=0.38*mlev+0.35*dtoa+0.27*blev;

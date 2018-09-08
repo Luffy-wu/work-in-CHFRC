@@ -1,0 +1,60 @@
+% 截面回归与IC值计算 以HAlpha因子为例
+conn=database('cafrsqlsrv1','shixi','123456','com.microsoft.sqlserver.jdbc.SQLServerDriver','jdbc:sqlserver://');
+sqlquery1=exec(conn,'SELECT DISTINCT [trade_month] FROM [wwb].[dbo].[Ashare_SZ_momentum_factor_group] ORDER BY [trade_month]');
+sqlquery1=fetch(sqlquery1);
+trade_month=sqlquery1.data;
+close(sqlquery1);
+n=length(trade_month);
+for i = 1:n-1
+ tic
+ % 提取序列依次为 [code]证券代码 [trade_month]交易年月 [industry]行业 [market_value]市值 [monthly_return]月平均收益 [HAlpha]动量因子
+ % 不同因子需替换为[return_1m],[return_3m],[return_6m],[return_12m],
+ % [wgt_return_1m],[wgt_return_3m],[wgt_return_6m],[wgt_return_12m],
+ % [exp_wgt_return_1m],[exp_wgt_return_3m],[exp_wgt_return_6m],[exp_wgt_return_12m]
+ str1='SELECT [code],[trade_month],[industry],[market_value],[monthly_return],[HAlpha] FROM [wwb].[dbo].[Ashare_SZ_momentum_factor_group] WHERE [trade_month]='' ';
+ str2=char(trade_month(i,1));
+ str3=char(trade_month(i+1,1));
+ str4=' ''ORDER BY [code]';
+ sqlquery2=exec(conn,strcat(str1,str2,str4));
+ sqlquery2=fetch(sqlquery2);
+ return_rate_t=sqlquery2.data;
+ sqlquery3=exec(conn,strcat(str1,str3,str4));
+ sqlquery3=fetch(sqlquery3);
+ return_rate_t_1=sqlquery3.data;
+ toc
+ % 删除行业分类为null的数据
+ return_rate_t(find(strcmp(return_rate_t(:,3),'null')==1),:)=[];
+ stock_t=return_rate_t(:,1);
+ stock_t_1=return_rate_t_1(:,1);
+ [~,key1,key2]=intersect(stock_t,stock_t_1);
+ industry=str2num(cell2mat(return_rate_t(key1,3)));
+ market_value=log(cell2mat(return_rate_t(key1,4)));
+ factor=cell2mat(return_rate_t(key1,6));
+ monthly_return=cell2mat(return_rate_t_1(key2,5));
+ % 极值处理（中位数去极值法 winsorize）
+ factor_diff=median(abs(factor-median(factor)));
+ factor(factor>median(factor)+5*factor_diff)=median(factor)+5*factor_diff;
+ factor(factor<median(factor)-5*factor_diff)=median(factor)-5*factor_diff;
+ % 标准化处理
+ factor=zscore(factor);
+ % 缺失值处理
+ factor(isnan(factor),1)=0;
+ % 去除行业因子和市值因子
+ industry_code=unique(industry);
+ industry_dummy=zeros(length(factor),length(industry_code));
+ for k =1:length(industry_code)
+  industry_dummy(find(industry==industry_code(k)),k)=1;
+ end
+ market_value(market_value>quantile(market_value,0.975))=quantile(market_value,0.975);
+ market_value(market_value<quantile(market_value,0.025))=quantile(market_value,0.025);
+ [~,~,r] = regress(monthly_return,[industry_dummy market_value]);
+ % 市值加权WLS
+ weight=market_value./sum(market_value);
+ x=weight.*factor;
+ y=weight.*r;
+ stat=regstats(y,x,'linear','tstat');
+ beta(i,1)=stat.tstat.beta(2);
+ t(i,1)=stat.tstat.t(2);
+ ic(i,1)=corr(x,y,'type','Spearman');
+ i
+end
